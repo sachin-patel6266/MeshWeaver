@@ -96,7 +96,10 @@ Application callables use the form `package.module:function`. Arguments and
 keyword arguments are JSON (`--args "[1,2]"`, `--kwargs "{""limit"":100}"`).
 Python callers may instead use `await node.submit(function, *args, **kwargs)`.
 Task delivery is at-least-once if a worker fails during execution; tasks with
-external side effects should be idempotent.
+external side effects should be idempotent. A worker suppresses recent duplicate
+task IDs from the same authenticated sender and can replay a cached result, but
+this in-memory deduplication is bounded and does not prevent duplicate execution
+across different workers after a failure or after a worker restarts.
 
 ## Ten-node local demonstration
 

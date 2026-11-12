@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import OrderedDict
 import json
 import logging
 import inspect
@@ -40,6 +41,17 @@ class PendingTask:
     attempted: set[str] = field(default_factory=set)
     assigned_to: str | None = None
     reassigned: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass(slots=True)
+class RemoteTaskRecord:
+    sender_id: str
+    task_id: str
+    origin_host: str
+    origin_port: int
+    state: str = "running"
+    result_message: dict[str, Any] | None = None
+    result_size: int = 0
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):
@@ -84,6 +96,8 @@ class MeshWeaverNode:
         self._pending: dict[str, PendingTask] = {}
         self._running: dict[str, asyncio.Task[Any]] = {}
         self._completed: list[tuple[str, str]] = []
+        self._remote_tasks: OrderedDict[tuple[str, str], RemoteTaskRecord] = OrderedDict()
+        self._remote_result_cache_bytes = 0
 
     @property
     def node_id(self) -> str:
@@ -286,16 +300,16 @@ class MeshWeaverNode:
             function, args, kwargs = cloudpickle.loads(payload)
             result = await self._invoke(function, args, kwargs)
             pending = self._pending.get(task_id)
+            self._record_completion(task_id, "completed")
             if pending is not None and pending.assigned_to == self.node_id:
                 if not pending.result.done():
                     pending.result.set_result(result)
-            self._completed.append((task_id, "completed"))
         except Exception as exc:
             pending = self._pending.get(task_id)
+            self._record_completion(task_id, "failed")
             if pending is not None and pending.assigned_to == self.node_id:
                 if not pending.result.done():
                     pending.result.set_exception(exc)
-            self._completed.append((task_id, "failed"))
         finally:
             self._running.pop(task_id, None)
 
@@ -310,8 +324,11 @@ class MeshWeaverNode:
         return result
 
     async def _execute_received(
-        self, task_id: str, payload: bytes, origin_host: str, origin_port: int
+        self,
+        record: RemoteTaskRecord,
+        payload: bytes,
     ) -> None:
+        task_id = record.task_id
         try:
             function, args, kwargs = cloudpickle.loads(payload)
             result = await self._invoke(function, args, kwargs)
@@ -323,16 +340,82 @@ class MeshWeaverNode:
                 "task_id": task_id,
                 "payload": base64.b64encode(serialized).decode("ascii"),
             }
+            record.state = "completed"
+            status = "completed"
+        except asyncio.CancelledError:
+            record.state = "cancelled"
+            self._record_completion(task_id, "cancelled")
+            raise
         except Exception as exc:
             logger.exception("Task %s failed on this peer", task_id)
             message = {"type": "task_error", "task_id": task_id, "error": str(exc)}
+            record.state = "failed"
+            status = "failed"
+        self._record_completion(task_id, status)
+        self._running.pop(task_id, None)
+        self._cache_remote_result(record, message)
+        self._prune_remote_tasks((record.sender_id, task_id))
+        await self._deliver_remote_result(record)
+
+    async def _deliver_remote_result(self, record: RemoteTaskRecord) -> None:
+        if record.result_message is None:
+            return
         try:
-            await self._rpc(origin_host, origin_port, message)
-        except (OSError, ssl.SSLError, ProtocolError):
-            logger.warning("Unable to deliver the result for task %s", task_id)
-        finally:
-            self._running.pop(task_id, None)
-            self._completed.append((task_id, "completed" if message["type"] == "task_result" else "failed"))
+            await self._rpc(
+                record.origin_host, record.origin_port, record.result_message
+            )
+        except (OSError, ssl.SSLError, ProtocolError, asyncio.TimeoutError):
+            logger.warning("Unable to deliver the result for task %s", record.task_id)
+
+    def _record_completion(self, task_id: str, status: str) -> None:
+        for index, (recorded_id, _) in enumerate(self._completed):
+            if recorded_id == task_id:
+                self._completed[index] = (task_id, status)
+                return
+        self._completed.append((task_id, status))
+        if len(self._completed) > 1000:
+            del self._completed[:-1000]
+
+    def _cache_remote_result(
+        self, record: RemoteTaskRecord, message: dict[str, Any]
+    ) -> None:
+        encoded_size = len(json.dumps(message, separators=(",", ":")).encode("utf-8"))
+        if encoded_size > 16 * 1024 * 1024:
+            return
+        while self._remote_result_cache_bytes + encoded_size > 16 * 1024 * 1024:
+            oldest = next(
+                (
+                    existing
+                    for existing in self._remote_tasks.values()
+                    if existing.result_message is not None
+                ),
+                None,
+            )
+            if oldest is None:
+                return
+            self._remote_result_cache_bytes -= oldest.result_size
+            oldest.result_message = None
+            oldest.result_size = 0
+        record.result_message = message
+        record.result_size = encoded_size
+        self._remote_result_cache_bytes += encoded_size
+
+    def _prune_remote_tasks(
+        self, protected_key: tuple[str, str] | None = None
+    ) -> None:
+        while len(self._remote_tasks) > 1024:
+            removable_key = next(
+                (
+                    key
+                    for key, record in self._remote_tasks.items()
+                    if record.state != "running" and key != protected_key
+                ),
+                None,
+            )
+            if removable_key is None:
+                return
+            removed = self._remote_tasks.pop(removable_key)
+            self._remote_result_cache_bytes -= removed.result_size
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -402,8 +485,15 @@ class MeshWeaverNode:
         if kind == "task_submit":
             self._learn_sender(sender_id, message, remote_address)
             task_id = str(message.get("task_id", ""))
-            if not task_id or task_id in self._running:
-                return {"status": "error", "error": "Missing or duplicate task id."}
+            if not task_id:
+                return {"status": "error", "error": "Missing task id."}
+            task_key = (sender_id, task_id)
+            existing = self._remote_tasks.get(task_key)
+            if existing is not None:
+                self._remote_tasks.move_to_end(task_key)
+                if existing.state in {"completed", "failed"}:
+                    await self._deliver_remote_result(existing)
+                return {"status": "accepted", "duplicate": True}
             origin_host = str(message.get("origin_host", ""))
             origin_port = int(message.get("origin_port", 0))
             if not origin_host or not 1 <= origin_port <= 65535:
@@ -414,11 +504,19 @@ class MeshWeaverNode:
                 return {"status": "error", "error": f"Invalid task payload: {exc}"}
             if len(payload) > self.config.max_message_bytes // 2:
                 return {"status": "error", "error": "Task payload exceeds configured size limit."}
+            record = RemoteTaskRecord(
+                sender_id=sender_id,
+                task_id=task_id,
+                origin_host=origin_host,
+                origin_port=origin_port,
+            )
+            self._remote_tasks[task_key] = record
             task = asyncio.create_task(
-                self._execute_received(task_id, payload, origin_host, origin_port),
+                self._execute_received(record, payload),
                 name=f"task-{task_id}",
             )
             self._running[task_id] = task
+            self._prune_remote_tasks()
             return {"status": "accepted"}
         if kind in {"task_result", "task_error"}:
             pending = self._pending.get(str(message.get("task_id", "")))
@@ -426,6 +524,7 @@ class MeshWeaverNode:
                 return {"status": "ignored"}
             if kind == "task_error":
                 if not pending.result.done():
+                    self._record_completion(pending.task_id, "failed")
                     pending.result.set_exception(RuntimeError(str(message.get("error", "Remote task failed."))))
                 return {"status": "received"}
             try:
@@ -435,9 +534,11 @@ class MeshWeaverNode:
                 result = cloudpickle.loads(result_bytes)
             except Exception as exc:
                 if not pending.result.done():
+                    self._record_completion(pending.task_id, "failed")
                     pending.result.set_exception(ValueError(f"Invalid signed task result: {exc}"))
             else:
                 if not pending.result.done():
+                    self._record_completion(pending.task_id, "completed")
                     pending.result.set_result(result)
             return {"status": "received"}
         return {"status": "error", "error": f"Unknown message type: {kind}"}
