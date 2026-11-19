@@ -1,0 +1,4 @@
+[33m6c8ff47[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Restore project documentation and add verified demo results
+[33mc9257f1[m Document successful ten-node demo results
+[33mc657ec8[m improve peer task dispatch and integration testing
+[33m884e74c[m Initial commit: MeshWeaver P2P Task Broker
