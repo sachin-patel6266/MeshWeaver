@@ -28,14 +28,18 @@ def _parser() -> argparse.ArgumentParser:
         prog="meshweaver",
         description="A zero-central-server asynchronous P2P task broker.",
     )
-    parser.add_argument("--version", action="version", version=f"MeshWeaver {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"MeshWeaver {__version__}"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     init = commands.add_parser("init", help="Create a new Ed25519 node identity.")
     init.add_argument("--identity-dir", required=True)
     init.add_argument("--name", default="meshweaver-node")
 
-    bundle = commands.add_parser("trust-bundle", help="Create a PEM bundle from trusted peer certificates.")
+    bundle = commands.add_parser(
+        "trust-bundle", help="Create a PEM bundle from trusted peer certificates."
+    )
     bundle.add_argument("--output", required=True)
     bundle.add_argument("--certs", nargs="+", required=True)
 
@@ -51,12 +55,22 @@ def _parser() -> argparse.ArgumentParser:
     node.add_argument("--heartbeat-timeout", type=float, default=8.0)
     node.add_argument("--task-timeout", type=float, default=120.0)
 
-    submit = commands.add_parser("submit", help="Submit a Python callable to a trusted peer.")
+    submit = commands.add_parser(
+        "submit", help="Submit a Python callable to a trusted peer."
+    )
     _add_identity_options(submit)
-    submit.add_argument("--bootstrap", action="append", required=True, metavar="HOST:PORT")
-    submit.add_argument("--function", required=True, help="Callable as python_module:function_name")
-    submit.add_argument("--args", default="[]", help="JSON array of positional arguments.")
-    submit.add_argument("--kwargs", default="{}", help="JSON object of keyword arguments.")
+    submit.add_argument(
+        "--bootstrap", action="append", required=True, metavar="HOST:PORT"
+    )
+    submit.add_argument(
+        "--function", required=True, help="Callable as python_module:function_name"
+    )
+    submit.add_argument(
+        "--args", default="[]", help="JSON array of positional arguments."
+    )
+    submit.add_argument(
+        "--kwargs", default="{}", help="JSON object of keyword arguments."
+    )
     submit.add_argument("--timeout", type=float, default=120.0)
 
     return parser
@@ -71,7 +85,9 @@ def _load_callable(reference: str) -> Any:
     try:
         module_name, function_name = reference.split(":", maxsplit=1)
     except ValueError as exc:
-        raise ValueError("Function must be specified as python_module:function_name.") from exc
+        raise ValueError(
+            "Function must be specified as python_module:function_name."
+        ) from exc
     module = importlib.import_module(module_name)
     function = getattr(module, function_name)
     if not callable(function):
@@ -84,7 +100,9 @@ def _parse_bootstrap(values: list[str]) -> list[tuple[str, int]]:
     for value in values:
         host, separator, raw_port = value.rpartition(":")
         if not separator or not host:
-            raise ValueError(f"Invalid bootstrap address {value!r}; expected HOST:PORT.")
+            raise ValueError(
+                f"Invalid bootstrap address {value!r}; expected HOST:PORT."
+            )
         port = int(raw_port)
         if not 1 <= port <= 65535:
             raise ValueError(f"Invalid bootstrap port in {value!r}.")
@@ -134,7 +152,9 @@ async def _run_submit(args: argparse.Namespace) -> None:
     node = MeshWeaverNode(identity, args.trusted_certs, config)
     await node.start()
     try:
-        result = await node.submit(function, *positional, timeout=args.timeout, **keyword)
+        result = await node.submit(
+            function, *positional, timeout=args.timeout, **keyword
+        )
         console.print_json(json.dumps({"result": result}, default=repr))
     finally:
         await node.close()
@@ -156,14 +176,23 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "trust-bundle":
             certificates = [Path(path).read_bytes() for path in args.certs]
             write_certificate_bundle(certificates, args.output)
-            console.print(f"Created trust bundle with {len(certificates)} certificates: {args.output}")
+            console.print(
+                f"Created trust bundle with {len(certificates)} certificates: {args.output}"
+            )
         elif args.command == "node":
             asyncio.run(_run_node(args))
         elif args.command == "submit":
             asyncio.run(_run_submit(args))
     except KeyboardInterrupt:
         console.print("\nMeshWeaver stopped.")
-    except (OSError, ValueError, TypeError, RuntimeError, ImportError, AttributeError) as exc:
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+        ImportError,
+        AttributeError,
+    ) as exc:
         logging.getLogger("meshweaver").error("%s", exc)
         return 1
     return 0
@@ -171,4 +200,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

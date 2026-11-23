@@ -29,7 +29,7 @@ class PeerInfo:
         }
 
     @classmethod
-    def from_dict(cls, value: dict[str, object]) -> "PeerInfo":
+    def from_dict(cls, value: dict[str, object]) -> PeerInfo:
         return cls(
             node_id=str(value["node_id"]),
             host=str(value["host"]),
@@ -83,4 +83,3 @@ class KademliaRoutingTable:
             key=lambda peer: int(peer.node_id, 16) ^ int(target_id, 16),
         )
         return peers if count is None else peers[:count]
-

@@ -23,4 +23,3 @@ def count_primes(limit: int) -> dict[str, int]:
 def sum_squares(values: list[int]) -> int:
     """Return the sum of squares for a list of integers."""
     return sum(value * value for value in values)
-

@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from cryptography.exceptions import InvalidSignature
 from cryptography.x509.oid import NameOID
 
 
@@ -49,7 +49,7 @@ class Identity:
         self.node_id = self.fingerprint
 
     @classmethod
-    def create(cls, directory: str | Path, common_name: str) -> "Identity":
+    def create(cls, directory: str | Path, common_name: str) -> Identity:
         """Create and persist a new Ed25519 key and self-signed TLS certificate."""
         path = Path(directory)
         path.mkdir(parents=True, exist_ok=True)
@@ -72,10 +72,15 @@ class Identity:
             .serial_number(x509.random_serial_number())
             .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=1))
             .not_valid_after(datetime.now(timezone.utc) + timedelta(days=3650))
-            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                x509.BasicConstraints(ca=False, path_length=None), critical=True
+            )
             .add_extension(
                 x509.SubjectAlternativeName(
-                    [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+                    [
+                        x509.DNSName("localhost"),
+                        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                    ]
                 ),
                 critical=False,
             )
@@ -92,13 +97,15 @@ class Identity:
         return cls(private_key, certificate, key_path, cert_path)
 
     @classmethod
-    def load(cls, directory: str | Path) -> "Identity":
+    def load(cls, directory: str | Path) -> Identity:
         """Load an existing identity from its directory."""
         path = Path(directory)
         private_key = serialization.load_pem_private_key(
             (path / "identity.key").read_bytes(), password=None
         )
-        certificate = x509.load_pem_x509_certificate((path / "identity.crt").read_bytes())
+        certificate = x509.load_pem_x509_certificate(
+            (path / "identity.crt").read_bytes()
+        )
         if not isinstance(private_key, Ed25519PrivateKey):
             raise TypeError("MeshWeaver identities must use Ed25519 private keys.")
         if not isinstance(certificate.public_key(), Ed25519PublicKey):
@@ -109,11 +116,15 @@ class Identity:
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
         ):
             raise ValueError("The private key does not match the identity certificate.")
-        return cls(private_key, certificate, path / "identity.key", path / "identity.crt")
+        return cls(
+            private_key, certificate, path / "identity.key", path / "identity.crt"
+        )
 
     def sign(self, value: Any) -> str:
         """Sign canonical JSON and return a base64-encoded Ed25519 signature."""
-        return base64.b64encode(self.private_key.sign(canonical_json(value))).decode("ascii")
+        return base64.b64encode(self.private_key.sign(canonical_json(value))).decode(
+            "ascii"
+        )
 
 
 def load_trusted_certificates(path: str | Path) -> dict[str, x509.Certificate]:
@@ -170,15 +181,15 @@ def tls_contexts(
     return server, client
 
 
-def verify_signature(
-    certificate: x509.Certificate, value: Any, signature: str
-) -> bool:
+def verify_signature(certificate: x509.Certificate, value: Any, signature: str) -> bool:
     """Verify a signed RPC body against its trusted certificate."""
     public_key = certificate.public_key()
     if not isinstance(public_key, Ed25519PublicKey):
         return False
     try:
-        public_key.verify(base64.b64decode(signature, validate=True), canonical_json(value))
+        public_key.verify(
+            base64.b64decode(signature, validate=True), canonical_json(value)
+        )
     except (ValueError, TypeError, InvalidSignature):
         return False
     return True

@@ -27,4 +27,3 @@ def test_kademlia_rejects_self():
     table = KademliaRoutingTable(f"{0:064x}")
     with pytest.raises(ValueError):
         table.add(PeerInfo(f"{0:064x}", "127.0.0.1", 8000))
-

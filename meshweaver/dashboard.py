@@ -64,4 +64,3 @@ async def run_dashboard(node: MeshWeaverNode) -> None:
         while True:
             await asyncio.sleep(0.5)
             live.update(render_dashboard(node))
-

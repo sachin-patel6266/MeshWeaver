@@ -5,10 +5,10 @@ import base64
 import uuid
 
 import cloudpickle
+
 from meshweaver.config import NodeConfig
 from meshweaver.identity import Identity, write_certificate_bundle
 from meshweaver.node import MeshWeaverNode
-
 
 _EXECUTION_MARKERS: list[str] = []
 
@@ -148,13 +148,17 @@ async def test_task_is_reassigned_when_worker_disappears(tmp_path, monkeypatch):
                 task_id = next(iter(worker_one._running))
                 break
             await asyncio.sleep(0.01)
-        assert worker_one._running, "The designated first worker did not receive the task."
+        assert worker_one._running, (
+            "The designated first worker did not receive the task."
+        )
         assert task_id is not None
         for _ in range(100):
             if marker in _EXECUTION_MARKERS:
                 break
             await asyncio.sleep(0.01)
-        assert marker in _EXECUTION_MARKERS, "The assigned worker did not start executing the task."
+        assert marker in _EXECUTION_MARKERS, (
+            "The assigned worker did not start executing the task."
+        )
         await worker_one.close()
         assert await submission == marker
         assert (task_id, "completed") in worker_two._completed
@@ -266,4 +270,3 @@ async def test_duplicate_remote_submission_is_not_executed_twice(tmp_path):
     finally:
         await client.close()
         await worker.close()
-

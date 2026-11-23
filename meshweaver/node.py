@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from collections import OrderedDict
+import inspect
 import json
 import logging
-import inspect
 import socket
 import ssl
 import time
 import uuid
+from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import cloudpickle
 import psutil
@@ -55,7 +56,7 @@ class RemoteTaskRecord:
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):
-    def __init__(self, node: "MeshWeaverNode"):
+    def __init__(self, node: MeshWeaverNode):
         self.node = node
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
@@ -79,7 +80,9 @@ class MeshWeaverNode:
         self.trusted_certificates_path = trusted_certificates_path
         self.trusted_certificates = load_trusted_certificates(trusted_certificates_path)
         if identity.fingerprint not in self.trusted_certificates:
-            raise ValueError("The local identity certificate must be in the trust bundle.")
+            raise ValueError(
+                "The local identity certificate must be in the trust bundle."
+            )
         self.server_tls, self.client_tls = tls_contexts(
             identity, trusted_certificates_path
         )
@@ -96,7 +99,9 @@ class MeshWeaverNode:
         self._pending: dict[str, PendingTask] = {}
         self._running: dict[str, asyncio.Task[Any]] = {}
         self._completed: list[tuple[str, str]] = []
-        self._remote_tasks: OrderedDict[tuple[str, str], RemoteTaskRecord] = OrderedDict()
+        self._remote_tasks: OrderedDict[tuple[str, str], RemoteTaskRecord] = (
+            OrderedDict()
+        )
         self._remote_result_cache_bytes = 0
 
     @property
@@ -153,7 +158,9 @@ class MeshWeaverNode:
             try:
                 await self._connect_bootstrap(host, port)
             except (OSError, ssl.SSLError, asyncio.TimeoutError) as exc:
-                logger.warning("Could not connect to bootstrap peer %s:%s: %s", host, port, exc)
+                logger.warning(
+                    "Could not connect to bootstrap peer %s:%s: %s", host, port, exc
+                )
 
     async def close(self) -> None:
         """Stop background work and close all listeners."""
@@ -185,7 +192,9 @@ class MeshWeaverNode:
         task_id = uuid.uuid4().hex
         payload = cloudpickle.dumps((function, args, kwargs))
         if len(payload) > self.config.max_message_bytes // 2:
-            raise ValueError("Serialized task exceeds the configured message size limit.")
+            raise ValueError(
+                "Serialized task exceeds the configured message size limit."
+            )
         future = asyncio.get_running_loop().create_future()
         pending = PendingTask(task_id=task_id, payload=payload, result=future)
         self._pending[task_id] = pending
@@ -196,7 +205,9 @@ class MeshWeaverNode:
             while not future.done():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError(f"Task {task_id} exceeded its execution timeout.")
+                    raise TimeoutError(
+                        f"Task {task_id} exceeded its execution timeout."
+                    )
                 peer = await self._select_peer(pending.attempted)
                 pending.attempted.add(peer.node_id)
                 pending.assigned_to = peer.node_id
@@ -235,7 +246,9 @@ class MeshWeaverNode:
                     await self._reassign_from(peer.node_id)
                     continue
                 if response.get("status") != "accepted":
-                    raise RuntimeError(f"Peer rejected task {task_id}: {response.get('error')}")
+                    raise RuntimeError(
+                        f"Peer rejected task {task_id}: {response.get('error')}"
+                    )
                 assignment_wait = asyncio.create_task(pending.reassigned.wait())
                 done, _ = await asyncio.wait(
                     {future, assignment_wait},
@@ -248,7 +261,9 @@ class MeshWeaverNode:
                 if future in done:
                     break
                 if not done:
-                    raise TimeoutError(f"Task {task_id} exceeded its execution timeout.")
+                    raise TimeoutError(
+                        f"Task {task_id} exceeded its execution timeout."
+                    )
             return await future
         finally:
             self._pending.pop(task_id, None)
@@ -259,7 +274,9 @@ class MeshWeaverNode:
         while True:
             candidates = [
                 peer
-                for peer in self.routing.closest(target_id, self.config.replication_factor)
+                for peer in self.routing.closest(
+                    target_id, self.config.replication_factor
+                )
                 if peer.node_id not in asked
             ]
             if not candidates:
@@ -268,7 +285,9 @@ class MeshWeaverNode:
             for peer in candidates:
                 try:
                     response = await self._rpc(
-                        peer.host, peer.port, {"type": "find_node", "target_id": target_id}
+                        peer.host,
+                        peer.port,
+                        {"type": "find_node", "target_id": target_id},
                     )
                     for record in response.get("peers", []):
                         self._learn_peer(PeerInfo.from_dict(record))
@@ -292,7 +311,11 @@ class MeshWeaverNode:
             raise RuntimeError("No untried trusted peers remain for task reassignment.")
         return min(
             candidates,
-            key=lambda peer: (peer.cpu_percent, peer.memory_percent, peer.tasks_running),
+            key=lambda peer: (
+                peer.cpu_percent,
+                peer.memory_percent,
+                peer.tasks_running,
+            ),
         )
 
     async def _execute_local(self, task_id: str, payload: bytes) -> None:
@@ -313,9 +336,16 @@ class MeshWeaverNode:
         finally:
             self._running.pop(task_id, None)
 
-    async def _invoke(self, function: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    async def _invoke(
+        self,
+        function: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
         if inspect.iscoroutinefunction(function):
-            return await asyncio.wait_for(function(*args, **kwargs), self.config.task_timeout)
+            return await asyncio.wait_for(
+                function(*args, **kwargs), self.config.task_timeout
+            )
         result = await asyncio.wait_for(
             asyncio.to_thread(function, *args, **kwargs), self.config.task_timeout
         )
@@ -334,7 +364,9 @@ class MeshWeaverNode:
             result = await self._invoke(function, args, kwargs)
             serialized = cloudpickle.dumps(result)
             if len(serialized) > self.config.max_message_bytes // 2:
-                raise ValueError("Serialized task result exceeds the message size limit.")
+                raise ValueError(
+                    "Serialized task result exceeds the message size limit."
+                )
             message = {
                 "type": "task_result",
                 "task_id": task_id,
@@ -400,9 +432,7 @@ class MeshWeaverNode:
         record.result_size = encoded_size
         self._remote_result_cache_bytes += encoded_size
 
-    def _prune_remote_tasks(
-        self, protected_key: tuple[str, str] | None = None
-    ) -> None:
+    def _prune_remote_tasks(self, protected_key: tuple[str, str] | None = None) -> None:
         while len(self._remote_tasks) > 1024:
             removable_key = next(
                 (
@@ -422,20 +452,31 @@ class MeshWeaverNode:
     ) -> None:
         try:
             ssl_object = writer.get_extra_info("ssl_object")
-            certificate_bytes = ssl_object.getpeercert(binary_form=True) if ssl_object else None
+            certificate_bytes = (
+                ssl_object.getpeercert(binary_form=True) if ssl_object else None
+            )
             if not certificate_bytes:
-                raise ProtocolError("RPC requires a mutually authenticated TLS connection.")
+                raise ProtocolError(
+                    "RPC requires a mutually authenticated TLS connection."
+                )
             certificate = x509.load_der_x509_certificate(certificate_bytes)
             fingerprint = certificate.fingerprint(hashes.SHA256()).hex()
             trusted = self.trusted_certificates.get(fingerprint)
             if trusted is None:
-                raise ProtocolError("TLS peer certificate is not in the local trust bundle.")
+                raise ProtocolError(
+                    "TLS peer certificate is not in the local trust bundle."
+                )
             envelope = await read_envelope(reader, self.config.max_message_bytes)
-            body = {"sender": envelope.get("sender"), "message": envelope.get("message")}
+            body = {
+                "sender": envelope.get("sender"),
+                "message": envelope.get("message"),
+            }
             if body["sender"] != fingerprint or not verify_signature(
                 trusted, body, str(envelope.get("signature", ""))
             ):
-                raise ProtocolError("RPC signature is invalid or does not match the TLS peer.")
+                raise ProtocolError(
+                    "RPC signature is invalid or does not match the TLS peer."
+                )
             message = body["message"]
             if not isinstance(message, dict):
                 raise ProtocolError("RPC message body must be an object.")
@@ -446,7 +487,11 @@ class MeshWeaverNode:
         except (ProtocolError, OSError, ValueError, KeyError) as exc:
             logger.debug("Rejected RPC connection: %s", exc)
             try:
-                writer.write(encode_envelope(self.identity, {"status": "error", "error": str(exc)}))
+                writer.write(
+                    encode_envelope(
+                        self.identity, {"status": "error", "error": str(exc)}
+                    )
+                )
                 await writer.drain()
             except OSError:
                 pass
@@ -499,11 +544,16 @@ class MeshWeaverNode:
             if not origin_host or not 1 <= origin_port <= 65535:
                 return {"status": "error", "error": "Invalid result callback address."}
             try:
-                payload = base64.b64decode(str(message.get("payload", "")), validate=True)
+                payload = base64.b64decode(
+                    str(message.get("payload", "")), validate=True
+                )
             except ValueError as exc:
                 return {"status": "error", "error": f"Invalid task payload: {exc}"}
             if len(payload) > self.config.max_message_bytes // 2:
-                return {"status": "error", "error": "Task payload exceeds configured size limit."}
+                return {
+                    "status": "error",
+                    "error": "Task payload exceeds configured size limit.",
+                }
             record = RemoteTaskRecord(
                 sender_id=sender_id,
                 task_id=task_id,
@@ -525,17 +575,23 @@ class MeshWeaverNode:
             if kind == "task_error":
                 if not pending.result.done():
                     self._record_completion(pending.task_id, "failed")
-                    pending.result.set_exception(RuntimeError(str(message.get("error", "Remote task failed."))))
+                    pending.result.set_exception(
+                        RuntimeError(str(message.get("error", "Remote task failed.")))
+                    )
                 return {"status": "received"}
             try:
-                result_bytes = base64.b64decode(str(message.get("payload", "")), validate=True)
+                result_bytes = base64.b64decode(
+                    str(message.get("payload", "")), validate=True
+                )
                 if len(result_bytes) > self.config.max_message_bytes // 2:
                     raise ValueError("Result exceeds configured size limit.")
                 result = cloudpickle.loads(result_bytes)
             except Exception as exc:
                 if not pending.result.done():
                     self._record_completion(pending.task_id, "failed")
-                    pending.result.set_exception(ValueError(f"Invalid signed task result: {exc}"))
+                    pending.result.set_exception(
+                        ValueError(f"Invalid signed task result: {exc}")
+                    )
             else:
                 if not pending.result.done():
                     self._record_completion(pending.task_id, "completed")
@@ -564,15 +620,24 @@ class MeshWeaverNode:
                 timeout=self.config.rpc_timeout,
             )
             ssl_object = writer.get_extra_info("ssl_object")
-            certificate_bytes = ssl_object.getpeercert(binary_form=True) if ssl_object else None
+            certificate_bytes = (
+                ssl_object.getpeercert(binary_form=True) if ssl_object else None
+            )
             if not certificate_bytes:
                 raise ProtocolError("Remote peer did not present a TLS certificate.")
             certificate = x509.load_der_x509_certificate(certificate_bytes)
             fingerprint = certificate.fingerprint(hashes.SHA256()).hex()
             trusted = self.trusted_certificates.get(fingerprint)
-            body = {"sender": response.get("sender"), "message": response.get("message")}
-            if trusted is None or body["sender"] != fingerprint or not verify_signature(
-                trusted, body, str(response.get("signature", ""))
+            body = {
+                "sender": response.get("sender"),
+                "message": response.get("message"),
+            }
+            if (
+                trusted is None
+                or body["sender"] != fingerprint
+                or not verify_signature(
+                    trusted, body, str(response.get("signature", ""))
+                )
             ):
                 raise ProtocolError("Remote RPC response signature is invalid.")
             if not isinstance(body["message"], dict):
@@ -600,9 +665,13 @@ class MeshWeaverNode:
         )
         peer = PeerInfo.from_dict(response["peer"])
         self._learn_peer(peer)
-        await self._rpc(peer.host, peer.port, {"type": "ping", **self.own_info.as_dict()})
+        await self._rpc(
+            peer.host, peer.port, {"type": "ping", **self.own_info.as_dict()}
+        )
 
-    def _learn_sender(self, sender_id: str, message: dict[str, Any], remote_address: Any) -> None:
+    def _learn_sender(
+        self, sender_id: str, message: dict[str, Any], remote_address: Any
+    ) -> None:
         host = str(message.get("host") or (remote_address[0] if remote_address else ""))
         port = int(message.get("port", 0))
         if not host or not 1 <= port <= 65535:
@@ -619,7 +688,10 @@ class MeshWeaverNode:
         )
 
     def _learn_peer(self, peer: PeerInfo) -> None:
-        if peer.node_id == self.node_id or peer.node_id not in self.trusted_certificates:
+        if (
+            peer.node_id == self.node_id
+            or peer.node_id not in self.trusted_certificates
+        ):
             return
         self.routing.add(peer)
 
@@ -628,9 +700,9 @@ class MeshWeaverNode:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind(("", self.config.udp_port))
-            membership = socket.inet_aton(self.config.multicast_group) + socket.inet_aton(
-                "0.0.0.0"
-            )
+            membership = socket.inet_aton(
+                self.config.multicast_group
+            ) + socket.inet_aton("0.0.0.0")
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, membership)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
@@ -660,7 +732,10 @@ class MeshWeaverNode:
     async def _handle_discovery(self, data: bytes, address: tuple[str, int]) -> None:
         try:
             envelope = json.loads(data)
-            body = {"sender": envelope.get("sender"), "message": envelope.get("message")}
+            body = {
+                "sender": envelope.get("sender"),
+                "message": envelope.get("message"),
+            }
             sender_id = str(body["sender"])
             trusted = self.trusted_certificates.get(sender_id)
             if trusted is None or not verify_signature(
@@ -683,7 +758,10 @@ class MeshWeaverNode:
     async def _gossip_loop(self) -> None:
         while not self._closed:
             await asyncio.sleep(self.config.gossip_interval)
-            records = [self.own_info.as_dict(), *(peer.as_dict() for peer in self.peers)]
+            records = [
+                self.own_info.as_dict(),
+                *(peer.as_dict() for peer in self.peers),
+            ]
             for peer in list(self.peers):
                 try:
                     await self._rpc(
@@ -718,11 +796,20 @@ class MeshWeaverNode:
                     peer.cpu_percent = fresh.cpu_percent
                     peer.memory_percent = fresh.memory_percent
                     peer.tasks_running = fresh.tasks_running
-                except (OSError, ssl.SSLError, ProtocolError, asyncio.TimeoutError, KeyError, ValueError):
+                except (
+                    OSError,
+                    ssl.SSLError,
+                    ProtocolError,
+                    asyncio.TimeoutError,
+                    KeyError,
+                    ValueError,
+                ):
                     if now - peer.last_seen >= self.config.heartbeat_timeout:
                         self.routing.remove(peer.node_id)
                         await self._reassign_from(peer.node_id)
-                        logger.warning("Peer %s is unavailable and was removed", peer.node_id[:12])
+                        logger.warning(
+                            "Peer %s is unavailable and was removed", peer.node_id[:12]
+                        )
             expired = [
                 peer
                 for peer in self.peers

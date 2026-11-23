@@ -16,7 +16,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="meshweaver-demo-") as raw_directory:
         directory = Path(raw_directory)
         identities = [
-            Identity.create(directory / f"node-{index:02d}", f"meshweaver-demo-{index:02d}")
+            Identity.create(
+                directory / f"node-{index:02d}", f"meshweaver-demo-{index:02d}"
+            )
             for index in range(10)
         ]
         client = Identity.create(directory / "client", "meshweaver-demo-client")
@@ -94,4 +96,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

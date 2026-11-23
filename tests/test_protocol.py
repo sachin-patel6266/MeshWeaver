@@ -30,4 +30,3 @@ async def test_rejects_oversized_frame():
     reader.feed_eof()
     with pytest.raises(ProtocolError):
         await read_envelope(reader, 8)
-

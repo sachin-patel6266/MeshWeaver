@@ -28,4 +28,3 @@ class NodeConfig:
     @property
     def public_host(self) -> str:
         return self.advertise_host or self.host
-

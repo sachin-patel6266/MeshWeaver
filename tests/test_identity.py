@@ -22,4 +22,3 @@ def test_identity_signing_and_trust_bundle(tmp_path):
         trusted[first.node_id], {**body, "message": {"type": "task_submit"}}, signature
     )
     assert second.node_id in trusted
-
