@@ -146,7 +146,7 @@ async def _run_submit(args: argparse.Namespace) -> None:
     positional = json.loads(args.args)
     keyword = json.loads(args.kwargs)
     if not isinstance(positional, list) or not isinstance(keyword, dict):
-        raise ValueError("--args must be a JSON array and --kwargs a JSON object.")
+        raise TypeError("--args must be a JSON array and --kwargs a JSON object.")
     bootstrap = _parse_bootstrap(args.bootstrap)
     config = NodeConfig(host="127.0.0.1", port=0, discovery=False, bootstrap=bootstrap)
     node = MeshWeaverNode(identity, args.trusted_certs, config)
